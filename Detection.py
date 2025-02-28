@@ -2,14 +2,21 @@ import cv2
 import threading
 import queue
 from roboflow import Roboflow
+import pyrealsense2 as rs
+import numpy as np
 
 # Initialize Roboflow model
 rf = Roboflow(api_key="IuXGCojGHoUDyiR9rAgr")
 project = rf.workspace().project("object-detection-1-onzrn")
 model = project.version("8").model
 
-# Open webcam
-capture = cv2.VideoCapture(0)
+# Initialize RealSense pipeline
+pipeline = rs.pipeline()
+config = rs.config()
+
+# Enable the color stream from RealSense camera
+config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+pipeline.start(config)
 
 # Variables for smoother performance
 frame_queue = queue.Queue(maxsize=5)  # Limit queue size to avoid memory issues
@@ -17,31 +24,34 @@ latest_frame = None  # Raw frame (for display)
 processed_frame = None  # Frame with detections
 lock = threading.Lock()
 
-# Flag to control screenshot capture
-screenshot_taken = False
-screenshot_frame = None
-
 def video_capture():
-    """Continuously captures frames from the webcam."""
-    global latest_frame
+    """Continuously captures frames from the RealSense camera and performs object detection."""
+    global latest_frame, processed_frame
 
     while True:
-        ret, frame = capture.read()
-        if not ret:
-            continue  # Skip if frame capture fails
+        # Wait for a frame from the RealSense camera
+        frames = pipeline.wait_for_frames()
+        color_frame = frames.get_color_frame()
+        if not color_frame:
+            continue  # Skip if no frame is received
 
+        # Convert RealSense frame to NumPy array
+        frame = np.asanyarray(color_frame.get_data())
+
+        # Perform object detection on the captured frame
+        processed_frame = detect_objects(frame)
+
+        # Update latest_frame for display
         with lock:
-            latest_frame = frame  # Update latest frame (avoids lag)
+            latest_frame = frame
 
 def detect_objects(frame):
     """Performs object detection on a given frame."""
     # Resize frame (smaller = faster inference)
     resized_frame = cv2.resize(frame, (320, 240))
-    temp_image_path = "temp_frame.jpg"
-    cv2.imwrite(temp_image_path, resized_frame)
 
     # Perform object detection (API call)
-    predictions = model.predict(temp_image_path, confidence=40, overlap=30).json()
+    predictions = model.predict(resized_frame, confidence=40, overlap=30).json()
 
     # Copy frame and draw detections
     detected_frame = frame.copy()
@@ -64,32 +74,21 @@ capture_thread.start()
 while True:
     with lock:
         display_frame = latest_frame
+        detection_frame = processed_frame
 
     if display_frame is not None:
-        cv2.imshow("Webcam Feed", display_frame)
+        # Display the live feed
+        cv2.imshow("RealSense Webcam Feed", display_frame)
 
-    # Check for spacebar press to capture a screenshot and detect objects
-    key = cv2.waitKey(1) & 0xFF
-
-    if key == ord(' '):  # Spacebar pressed
-        with lock:
-            if latest_frame is not None:
-                screenshot_frame = latest_frame.copy()
-                screenshot_taken = True
-
-        # Detect objects in the screenshot
-        if screenshot_taken and screenshot_frame is not None:
-            processed_frame = detect_objects(screenshot_frame)
-            screenshot_taken = False  # Reset flag after detection
-
-    # Show the processed screenshot with detections
-    if processed_frame is not None:
-        cv2.imshow("Detected Objects", processed_frame)
+    if detection_frame is not None:
+        # Display the detected frame
+        cv2.imshow("Detected Objects", detection_frame)
 
     # Exit on pressing 'q'
+    key = cv2.waitKey(1) & 0xFF
     if key == ord('q'):
         break
 
 # Release resources
-capture.release()
+pipeline.stop()
 cv2.destroyAllWindows()
