@@ -1,0 +1,1 @@
+This project contains the code and documentation for challenge 2 - 3 in the Fontys Adaptive Robotics minor. 
