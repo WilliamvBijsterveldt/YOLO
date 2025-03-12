@@ -1,94 +1,75 @@
-import cv2
-import threading
-import queue
-from roboflow import Roboflow
 import pyrealsense2 as rs
 import numpy as np
+import cv2
+from ultralytics import YOLO
 
-# Initialize Roboflow model
-rf = Roboflow(api_key="IuXGCojGHoUDyiR9rAgr")
-project = rf.workspace().project("object-detection-1-onzrn")
-model = project.version("8").model
+# Load your trained YOLOv8 model
+model = YOLO("runs/detect/train13/weights/best.pt")  # Replace with your trained model path if different
 
 # Initialize RealSense pipeline
 pipeline = rs.pipeline()
 config = rs.config()
+config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)  # Depth stream
+config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)  # Color stream
 
-# Enable the color stream from RealSense camera
-config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+# Start streaming
 pipeline.start(config)
 
-# Variables for smoother performance
-frame_queue = queue.Queue(maxsize=5)  # Limit queue size to avoid memory issues
-latest_frame = None  # Raw frame (for display)
-processed_frame = None  # Frame with detections
-lock = threading.Lock()
+# Align depth to color stream
+align_to = rs.stream.color
+align = rs.align(align_to)
 
-def video_capture():
-    """Continuously captures frames from the RealSense camera and performs object detection."""
-    global latest_frame, processed_frame
-
+try:
     while True:
-        # Wait for a frame from the RealSense camera
+        # Wait for frames and align them
         frames = pipeline.wait_for_frames()
-        color_frame = frames.get_color_frame()
-        if not color_frame:
-            continue  # Skip if no frame is received
+        aligned_frames = align.process(frames)
 
-        # Convert RealSense frame to NumPy array
+        # Get color and depth frames
+        color_frame = aligned_frames.get_color_frame()
+        depth_frame = aligned_frames.get_depth_frame()
+
+        if not color_frame or not depth_frame:
+            continue
+
+        # Convert frames to NumPy arrays
         frame = np.asanyarray(color_frame.get_data())
+        depth_image = np.asanyarray(depth_frame.get_data())
 
-        # Perform object detection on the captured frame
-        processed_frame = detect_objects(frame)
+        # Run YOLOv8 detection
+        results = model(frame)
 
-        # Update latest_frame for display
-        with lock:
-            latest_frame = frame
+        # Process detection results
+        for r in results:
+            for box in r.boxes:
+                x1, y1, x2, y2 = map(int, box.xyxy[0])  # Bounding box
+                conf = box.conf[0].item()  # Confidence score
+                cls = int(box.cls[0])  # Class index
+                label = f"{model.names[cls]} {conf:.2f}"
 
-def detect_objects(frame):
-    """Performs object detection on a given frame."""
-    # Resize frame (smaller = faster inference)
-    resized_frame = cv2.resize(frame, (320, 240))
+                # Compute the center of the bounding box
+                x_center = (x1 + x2) // 2
+                y_center = (y1 + y2) // 2
 
-    # Perform object detection (API call)
-    predictions = model.predict(resized_frame, confidence=40, overlap=30).json()
+                # Get depth value at center (in millimeters)
+                depth_value = depth_frame.get_distance(x_center, y_center)
 
-    # Copy frame and draw detections
-    detected_frame = frame.copy()
-    for pred in predictions.get("predictions", []):
-        x, y, w, h = int(pred["x"]), int(pred["y"]), int(pred["width"]), int(pred["height"])
-        label = pred["class"]
+                # Draw bounding box
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
-        # Draw bounding box and label
-        cv2.rectangle(detected_frame, (x - w // 2, y - h // 2),
-                      (x + w // 2, y + h // 2), (0, 255, 0), 2)
-        cv2.putText(detected_frame, label, (x - w // 2, y - h // 2 - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                # Display object location and distance
+                position_text = f"X: {x_center}, Y: {y_center}, Distance: {depth_value:.2f}m"
+                cv2.putText(frame, position_text, (x1, y2 + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
-    return detected_frame
+        # Show the frame
+        cv2.imshow("YOLOv8 RealSense Detection with Distance ", frame)
 
-# Start background threads
-capture_thread = threading.Thread(target=video_capture, daemon=True)
-capture_thread.start()
+        # Exit on 'q' key press
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
 
-while True:
-    with lock:
-        display_frame = latest_frame
-        detection_frame = processed_frame
-
-    if display_frame is not None:
-        # Display the live feed
-        cv2.imshow("RealSense Webcam Feed", display_frame)
-
-    if detection_frame is not None:
-        # Display the detected frame
-        cv2.imshow("Detected Objects", detection_frame)
-
-    # Exit on pressing 'q'
-    key = cv2.waitKey(1) & 0xFF
-    if key == ord('q'):
-        break
-
-# Release resources
-pipeline.stop()
-cv2.destroyAllWindows()
+finally:
+    # Stop RealSense pipeline
+    pipeline.stop()
+    cv2.destroyAllWindows()
