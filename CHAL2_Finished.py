@@ -94,6 +94,8 @@ try:
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
+            # init dev branch
+
 finally:
     # Stop RealSense pipeline
     pipeline.stop()
