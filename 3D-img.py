@@ -72,10 +72,14 @@ try:
         point_cloud.estimate_normals(search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=0.1, max_nn=30))
 
         # Perform surface reconstruction using Poisson Surface Reconstruction
-        mesh, densities = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(point_cloud, depth=9)
+        mesh, densities = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(point_cloud, depth=9, width=0, scale=1.1, linear_fit=False)
+
+        bbox = mesh.get_axis_aligned_bounding_box()
+        p_mesh_crop = mesh.crop(bbox)
+
 
         # Visualize the mesh
-        o3d.visualization.draw_geometries([mesh])
+        o3d.visualization.draw_geometries([p_mesh_crop])
 
         # Break the loop on 'q' key press
         if cv2.waitKey(1) & 0xFF == ord('q'):
