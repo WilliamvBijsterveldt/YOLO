@@ -1,37 +1,46 @@
 import socket
-import time
-import csv
+import sys
 
-# Function to send coordinates to the UR5
-def send_coordinates_to_ur5(x, y, z, ip="192.168.0.5", port= 3002):
-    # Create a TCP socket
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+def main():
+    HOST_IP_ADDRESS = "192.168.0.2"  # Your PC's IP
+    PORT = 30002  # Ensure UR5 is connecting to this port
 
-    # Connect to the robot's controller
-    a = sock.connect((ip, port))
-    print(a)
-    # Prepare the coordinate message to send to the UR5
-    # Example format: "X, Y, Z"
-    coordinates_message = f"{x},{y},{z}"
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
     try:
-        # Send the coordinates to the robot
-        sock.send(coordinates_message.encode('utf-8'))
-        print(f"Sent coordinates to move to: X={x}, Y={y}, Z={z}")
-    except Exception as e:
-        print(f"Error sending coordinates: {e}")
-    finally:
-        # Close the connection
-        sock.close()
+        server_socket.bind((HOST_IP_ADDRESS, PORT))
+    except socket.error as e:
+        print(f"Error binding the socket: {e}")
+        sys.exit(1)
 
-# Example coordinates (replace these with the coordinates from your system)
-coordinates = [
-    [1, 2, 3],  # Example coordinates in meters
-    [4, 5, 6],
-    [7, 8, 9]
-]
+    server_socket.listen()
+    print(f"Listening on {HOST_IP_ADDRESS}:{PORT}")
 
-# Send the coordinates to the UR5 robot
-for coord in coordinates:
-    send_coordinates_to_ur5(coord[0], coord[1], coord[2])
-    time.sleep(1)  # Wait between sending coordinates (if needed)
+    client_socket, client_address = server_socket.accept()
+    print(f"Accepted connection from {client_address}")
+
+    print("Press 's' to send XYZ coordinates to UR5 or 'q' to quit...")
+
+    while True:
+        user_input = input("Press 's' to send XYZ coordinates or 'q' to quit: ").strip().lower()
+
+        if user_input == 'q':  # Quit the program if 'q' is pressed
+            break
+        elif user_input == 's':  # Send XYZ coordinates when 's' is pressed
+            # Send the XYZ coordinates as separate integers (e.g., 1, 2, 3)
+            x, y, z = 1, 2, 3
+            print(f"Sending XYZ coordinates: ({x}, {y}, {z})")
+
+            # Send the coordinates in the format: (val_1, val_2, val_3)\n
+            message = f"({x}, {y}, {z})\n"
+            client_socket.send(message.encode())
+
+        else:
+            print("Invalid input. Press 's' to send XYZ coordinates or 'q' to quit.")
+
+    # Close the connection when done
+    client_socket.close()
+    server_socket.close()
+
+if __name__ == "__main__":
+    main()
