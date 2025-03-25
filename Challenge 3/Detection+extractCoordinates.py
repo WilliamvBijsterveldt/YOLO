@@ -86,7 +86,7 @@ try:
         cv2.rectangle(frame, (x1, y1), (x1 + w, y1 + h), (0, 255, 0), 2)
 
         # Run YOLO detection
-        results = model(frame)
+        results = model(frame,verbose=False)
         detected_objects = []
 
         for r in results:
@@ -156,7 +156,7 @@ try:
                     continue
 
                 # Run YOLO detection
-                results = model(np.asanyarray(color_frame.get_data()))
+                results = model(np.asanyarray(color_frame.get_data()),verbose=False)
                 for r in results:
                     for box in r.boxes:
                         x1_obj, y1_obj, x2_obj, y2_obj = map(int, box.xyxy[0])

@@ -107,7 +107,7 @@ try:
         cv2.rectangle(frame, (x1, y1), (x1 + w, y1 + h), (0, 255, 0), 2)
 
         # Run YOLO detection
-        results = model(frame)
+        results = model(frame,verbose=False)
         detected_objects = []
 
         for r in results:
