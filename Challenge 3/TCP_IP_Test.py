@@ -19,24 +19,25 @@ def main():
     client_socket, client_address = server_socket.accept()
     print(f"Accepted connection from {client_address}")
 
-    print("Press 's' to send XYZ coordinates to UR5 or 'q' to quit...")
+    print("Enter XYZ coordinates in the format (x,y,z) or type 'q' to quit...")
 
     while True:
-        user_input = input("Press 's' to send XYZ coordinates or 'q' to quit: ").strip().lower()
+        user_input = input("Enter XYZ coordinates (x,y,z) or 'q' to quit: ").strip()
 
-        if user_input == 'q':  # Quit the program if 'q' is pressed
+        if user_input.lower() == 'q':  # Quit the program if 'q' is entered
             break
-        elif user_input == 's':  # Send XYZ coordinates when 's' is pressed
-            # Send the XYZ coordinates as separate integers (e.g., 1, 2, 3)
-            x, y, z = 200, 400, 350
+
+        # Parse user input
+        try:
+            x, y, z = map(int, user_input.strip("()").split(","))
             print(f"Sending XYZ coordinates: ({x}, {y}, {z})")
 
-            # Send the coordinates in the format: (val_1, val_2, val_3)\n
+            # Convert to meters and format the message
             message = f"({x/1000}, {y/1000}, {z/1000})\n"
             client_socket.send(message.encode())
 
-        else:
-            print("Invalid input. Press 's' to send XYZ coordinates or 'q' to quit.")
+        except ValueError:
+            print("Invalid format! Please enter coordinates in the format: (100,200,150)")
 
     # Close the connection when done
     client_socket.close()
