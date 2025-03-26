@@ -24,7 +24,7 @@ roi_selected = False
 roi = (0, 0, 0, 0)  # (x, y, width, height)
 physical_width_cm = 40.0  # Longer side of ROI
 physical_height_cm = 30.0  # Shorter side of ROI
-camera_height_cm = 65.0  # Camera is 65 cm above the floor
+camera_height_cm = 68.0  # Camera is 68 cm above the floor
 
 # Function to select and scale ROI
 def select_roi(frame):

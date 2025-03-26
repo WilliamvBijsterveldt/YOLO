@@ -7,6 +7,7 @@ import csv
 from ultralytics import YOLO
 import time
 import random
+import pickle
 
 # Load YOLOv8 model
 model = YOLO("runs/detect/train13/weights/best.pt")  # Update path if needed
@@ -157,24 +158,39 @@ try:
 
         # Show frame
         cv2.imshow("YOLOv8 RealSense Detection", frame)
+        
+        with open("transformation_matrix.pkl", "rb") as f:
+            transformation_matrix = pickle.load(f)
 
         # Key press handling
         key = cv2.waitKey(1) & 0xFF
         if key == ord('q'):
             break
         elif key == ord('s') and detected_objects:
-            # Select a random object from detected objects
+             # Select a random object from detected objects
             random_obj = random.choice(detected_objects)
 
             # Extract the coordinates of the selected object
             x, y, z = random_obj[1], random_obj[2], random_obj[3]
-            print(f"Sending coordinates: ({x/1000}, {y/1000}, {z/1000})")
 
-            # Send the XYZ coordinates to UR5
-            message = f"({x}, {y}, {z})\n"
+            # Convert (x, y, z) to homogeneous coordinates (x, y, z, 1)
+            coord_vector = np.array([x, y, z, 1]).reshape(4, 1)
+
+            # Apply transformation matrix
+            transformed_coord = np.dot(transformation_matrix, coord_vector)
+
+            # Extract new (x', y', z') values
+            x_transformed = transformed_coord[0, 0]
+            y_transformed = transformed_coord[1, 0]
+            z_transformed = transformed_coord[2, 0]
+
+            print(f"Transformed coordinates: ({x_transformed:.2f}, {y_transformed:.2f}, {z_transformed:.2f})")
+
+            # Send the transformed XYZ coordinates to UR5
+            message = f"({x_transformed/100}, {y_transformed/100}, {z_transformed/100})\n"
             client_socket.send(message.encode())
 
-            print(f"Sent coordinates ({x}, {y}, {z}) to UR5.")
+            print(f"Sent transformed coordinates ({x_transformed}, {y_transformed}, {z_transformed}) to UR5.")
 
 finally:
     pipeline.stop()
