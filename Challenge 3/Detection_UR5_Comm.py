@@ -168,7 +168,7 @@ try:
 
             # Extract the coordinates of the selected object
             x, y, z = random_obj[1], random_obj[2], random_obj[3]
-            print(f"Sending coordinates: ({x}, {y}, {z})")
+            print(f"Sending coordinates: ({x/1000}, {y/1000}, {z/1000})")
 
             # Send the XYZ coordinates to UR5
             message = f"({x}, {y}, {z})\n"

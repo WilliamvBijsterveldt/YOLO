@@ -28,11 +28,11 @@ def main():
             break
         elif user_input == 's':  # Send XYZ coordinates when 's' is pressed
             # Send the XYZ coordinates as separate integers (e.g., 1, 2, 3)
-            x, y, z = 1, 2, 3
+            x, y, z = 200, 400, 350
             print(f"Sending XYZ coordinates: ({x}, {y}, {z})")
 
             # Send the coordinates in the format: (val_1, val_2, val_3)\n
-            message = f"({x}, {y}, {z})\n"
+            message = f"({x/1000}, {y/1000}, {z/1000})\n"
             client_socket.send(message.encode())
 
         else:
