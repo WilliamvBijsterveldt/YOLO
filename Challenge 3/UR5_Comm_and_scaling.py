@@ -3,11 +3,9 @@ import sys
 import pyrealsense2 as rs
 import numpy as np
 import cv2
-import csv
 from ultralytics import YOLO
 import time
-import random
-import pickle  # Import pickle to load the transformation matrix
+import pickle
 
 # Load YOLOv8 model
 model = YOLO("runs/detect/train13/weights/best.pt")  # Update path if needed
@@ -31,7 +29,7 @@ physical_height_cm = 30.0  # Shorter side of ROI
 camera_height_cm = 65.0  # Camera is 65 cm above the floor
 
 # Socket setup for UR5 communication
-HOST_IP_ADDRESS = "192.168.0.2"  # Your PC's IP
+HOST_IP_ADDRESS = "192.168.0.3"  # Your PC's IP
 PORT = 30002  # Ensure UR5 is connecting to this port
 
 server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -68,26 +66,6 @@ def select_roi(frame):
     
     roi_selected = True
 
-# Function to save detected object coordinates
-def save_coordinates(objects):
-    with open("object_coords.csv", mode="w", newline="") as file:  # Overwrite file
-        writer = csv.writer(file)
-        writer.writerow(["Object Name", "X (cm)", "Y (cm)", "Z (cm)"])  # Column headers
-        
-        for obj in objects:
-            writer.writerow(obj)
-
-# Function to calculate the average of a list of coordinates
-def average_coordinates(objects):
-    avg_objects = []
-    for obj_name in set([obj[0] for obj in objects]):
-        obj_coords = [obj for obj in objects if obj[0] == obj_name]
-        avg_x = np.mean([obj[1] for obj in obj_coords])
-        avg_y = np.mean([obj[2] for obj in obj_coords])
-        avg_z = np.mean([obj[3] for obj in obj_coords])
-        avg_objects.append([obj_name, round(avg_x, 2), round(avg_y, 2), round(avg_z, 2)])
-    return avg_objects
-
 # Function to transform coordinates using the transformation matrix
 def transform_coordinates(camera_coords):
     # Convert the camera coordinates to homogeneous coordinates (4D vector)
@@ -99,7 +77,13 @@ def transform_coordinates(camera_coords):
     # Return the transformed robot coordinates (ignoring the last homogeneous component)
     return robot_point_homogeneous[:3]
 
+# Function to handle user input for object selection
+def get_user_input_for_object():
+    return input("Enter the name of the object to go to: ").strip().lower()
+
 try:
+    detected_objects = []  # List to hold detected objects
+    
     while True:
         # Wait for frames and align
         frames = pipeline.wait_for_frames()
@@ -126,8 +110,8 @@ try:
         cv2.rectangle(frame, (x1, y1), (x1 + w, y1 + h), (0, 255, 0), 2)
 
         # Run YOLO detection
-        results = model(frame,verbose=False)
-        detected_objects = []
+        results = model(frame, verbose=False)
+        detected_objects.clear()  # Clear previous objects
 
         for r in results:
             for box in r.boxes:
@@ -154,17 +138,8 @@ try:
                     # Height relative to the floor
                     height_from_floor = camera_height_cm - depth_value_cm
 
-                    # Save coordinates in ROI grid
-                    detected_objects.append([object_name, round(x_cm, 2), round(y_cm, 2), round(height_from_floor, 2)])
-
-                    # Transform coordinates using the transformation matrix
-                    transformed_coords = transform_coordinates([x_cm, y_cm, height_from_floor])
-
-                    # Send the transformed coordinates to the robot arm (in meters)
-                    print(f"Sending transformed coordinates: ({transformed_coords[0]/100}, {transformed_coords[1]/100}, {transformed_coords[2]/100})")
-                    message = f"({transformed_coords[0]}, {transformed_coords[1]}, {transformed_coords[2]})\n"
-                    client_socket.send(message.encode())
-                    print(f"Sent transformed coordinates ({transformed_coords[0]}, {transformed_coords[1]}, {transformed_coords[2]}) to UR5.")
+                    # Save object information including size (width and height in pixels)
+                    detected_objects.append([object_name, x_cm, y_cm, height_from_floor, x2_obj - x1_obj, y2_obj - y1_obj])
 
                     # Draw bounding box and labels
                     cv2.rectangle(frame, (x1_obj, y1_obj), (x2_obj, y2_obj), (0, 255, 0), 2)
@@ -184,23 +159,30 @@ try:
         # Show frame
         cv2.imshow("YOLOv8 RealSense Detection", frame)
 
-        # Key press handling
+        # Wait for user input for object selection
+        user_input = get_user_input_for_object()
+
+        # Check if the entered object name exists in the detected objects
+        selected_object = None
+        for obj in detected_objects:
+            if obj[0].lower() == user_input:
+                selected_object = obj
+                break
+
+        if selected_object is not None:
+            # Transform the coordinates of the selected object
+            transformed_coords = transform_coordinates([selected_object[1], selected_object[2], selected_object[3]])
+
+            # Send the transformed coordinates to UR5 (converted to meters)
+            message = f"({transformed_coords[0]/100}, {transformed_coords[1]/100}, {transformed_coords[2]/100})\n"
+            client_socket.send(message.encode())
+
+            print(f"Sent coordinates ({transformed_coords[0]/100}, {transformed_coords[1]/100}, {transformed_coords[2]/100}) to UR5.")
+
+        # If the user presses 'q', break the loop
         key = cv2.waitKey(1) & 0xFF
         if key == ord('q'):
             break
-        elif key == ord('s') and detected_objects:
-            # Select a random object from detected objects
-            random_obj = random.choice(detected_objects)
-
-            # Extract the coordinates of the selected object
-            x, y, z = random_obj[1], random_obj[2], random_obj[3]
-            print(f"Sending coordinates: ({x/1000}, {y/1000}, {z/1000})")
-
-            # Send the XYZ coordinates to UR5
-            message = f"({x}, {y}, {z})\n"
-            client_socket.send(message.encode())
-
-            print(f"Sent coordinates ({x}, {y}, {z}) to UR5.")
 
 finally:
     pipeline.stop()
