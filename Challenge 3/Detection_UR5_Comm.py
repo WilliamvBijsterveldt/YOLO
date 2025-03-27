@@ -32,7 +32,7 @@ physical_height_cm = 30.0  # Shorter side of ROI
 camera_height_cm = 65.0  # Camera is 65 cm above the floor
 
 # Socket setup for UR5 communication
-HOST_IP_ADDRESS = "192.168.0.3"  # Your PC's IP
+HOST_IP_ADDRESS = "192.168.0.2"  # Your PC's IP
 PORT = 30002  # Ensure UR5 is connecting to this port
 
 server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -49,10 +49,14 @@ print(f"Listening on {HOST_IP_ADDRESS}:{PORT}")
 client_socket, client_address = server_socket.accept()
 print(f"Accepted connection from {client_address}")
 
-# Load the transformation matrix (from .pkl file)
-def load_transformation_matrix(filename="transformation_matrix.pkl"):
+def load_transformation_matrix(filename="transformation_matrix_2d.pkl"):
     with open(filename, "rb") as f:
-        return pickle.load(f)
+        matrix = pickle.load(f)
+        matrix = np.array(matrix, dtype=np.float64)  # Ensure it's a float64 matrix
+        print(f"Transformation matrix shape: {matrix.shape}")  # Check the shape
+        return matrix
+
+
 
 transformation_matrix = load_transformation_matrix()
 
@@ -69,24 +73,16 @@ def select_roi(frame):
     
     roi_selected = True
 
-def transform_coordinates(camera_coords):
+def transform_point(camera_point: list, transformation_matrix: np.ndarray) -> list:
     """
-    Transforms 3D camera coordinates to robot coordinates using the transformation matrix.
-    
-    Args:
-        camera_coords (list): [x_c, y_c, z_c] in cm.
-
-    Returns:
-        list: [x_r, y_r, z_r] in meters (UR5 format).
+    Transform a given 2D camera point to robot coordinates using the transformation matrix.
     """
-    # Convert the camera coordinates to homogeneous coordinates (4D vector)
-    camera_point_homogeneous = np.array([camera_coords[0], camera_coords[1], camera_coords[2], 1])
+    camera_point_homogeneous = np.array(camera_point + [1])  # Convert to homogeneous coordinates
+    robot_point_homogeneous = transformation_matrix @ camera_point_homogeneous
+    return robot_point_homogeneous[:2].tolist()
 
-    # Apply the transformation matrix
-    robot_point_homogeneous = np.dot(transformation_matrix, camera_point_homogeneous)
 
-    # Convert from cm to meters
-    return [robot_point_homogeneous[0] / 100, robot_point_homogeneous[1] / 100, robot_point_homogeneous[2] / 100]
+
 
 
 # Function to save detected object coordinates
@@ -187,9 +183,6 @@ try:
         # Show frame
         cv2.imshow("YOLOv8 RealSense Detection", frame)
         
-        with open("transformation_matrix.pkl", "rb") as f:
-            transformation_matrix = pickle.load(f)
-
         # Key press handling
         key = cv2.waitKey(1) & 0xFF
         if key == ord('q'):
@@ -199,18 +192,17 @@ try:
             random_obj = random.choice(detected_objects)
 
             # Extract the coordinates of the selected object
-            x, y, z = random_obj[1], random_obj[2], random_obj[3]
-
-            transformed_coords = transform_coordinates([random_obj[1], random_obj[2], random_obj[3]])
-            print(f"Sending coordinates: ({x/100}, {y/100}, {z/100})")
+            x, y = random_obj[1]/100, random_obj[2]/100
+            print("camera points: ",x,y)
+            # Transform coordinates using the new transform_point function
+            transformed_coords = transform_point([x,y], transformation_matrix)
+            print(f"Sending transformed coordinates: ({transformed_coords[0]}, {transformed_coords[1]})")
 
             # Send the XYZ coordinates to UR5
-            message = f"({transformed_coords[0]}, {transformed_coords[1]}, {transformed_coords[2]})\n"
+            message = f"({transformed_coords[0]}, {transformed_coords[1]}, {0})\n"
             client_socket.send(message.encode())
 
-            print(f"Sent coordinates ({transformed_coords[0]}, {transformed_coords[1]}, {transformed_coords[2]}) to UR5.")
-
-            print(f"Sent coordinates ({x}, {y}, {z}) to UR5.")
+            print(f"Sent coordinates ({transformed_coords[0]}, {transformed_coords[1]}) to UR5.")
 
 finally:
     pipeline.stop()

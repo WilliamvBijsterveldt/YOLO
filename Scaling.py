@@ -1,14 +1,13 @@
 import pyrealsense2 as rs
 import numpy as np
 import cv2
-from ultralytics import YOLO
 import pickle
 from typing import List, Dict, Tuple
 
-class CameraToRobotTransformer:
-    def __init__(self, model_path: str = "runs/detect/train13/weights/best.pt"):
+class CameraToRobotTransformer2D:
+    def __init__(self):
         """
-        Initialize the camera-to-robot transformation pipeline.
+        Initialize the camera-to-robot 2D transformation pipeline.
         """
         self.pipeline = rs.pipeline()
         config = rs.config()
@@ -16,9 +15,8 @@ class CameraToRobotTransformer:
         config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
         self.pipeline.start(config)
         
-        self.transformation_matrix = np.eye(4)
+        self.transformation_matrix = np.eye(3)  # 3x3 transformation matrix for 2D
         self.calibration_points: List[Dict[str, List[float]]] = []
-        self.model = YOLO(model_path)
         self.align = rs.align(rs.stream.color)
         self.selected_point: Tuple[int, int] | None = None
         self.roi = None  # Store ROI for consistency
@@ -54,15 +52,18 @@ class CameraToRobotTransformer:
             if self.roi:
                 roi_x, roi_y, roi_w, roi_h = self.roi
                 if roi_x <= x <= roi_x + roi_w and roi_y <= y <= roi_y + roi_h:
-                    self.selected_point = (x, y)
+                    self.selected_point = (x - roi_x, roi_h - (y - roi_y))  # Make (0,0) bottom-left
+                    self.selected_point = (self.selected_point[0] * (0.4 / roi_w), self.selected_point[1] * (0.3 / roi_h))  # Scale to 30x40 cm
+                    print(f"Selected point (ROI frame, scaled): {self.selected_point}")
+                    self.test_transform_point()
                 else:
                     print("Click inside the ROI only!")
 
-    def collect_calibration_points(self, num_points: int = 4) -> None:
+    def collect_calibration_points(self, num_points: int = 6) -> None:
         """
-        Collects at least 4 calibration points for a better transformation matrix.
+        Collects at least 4 calibration points for computing the 2D transformation matrix.
         """
-        print("Collecting calibration points... Minimum required: 4")
+        print("Collecting calibration points... Click on the image to select points.")
         self.calibration_points = []
         self.roi = self.select_roi()
         if not self.roi:
@@ -76,33 +77,20 @@ class CameraToRobotTransformer:
             frames = self.pipeline.wait_for_frames()
             aligned_frames = self.align.process(frames)
             color_frame = aligned_frames.get_color_frame()
-            depth_frame = aligned_frames.get_depth_frame()
-            if not color_frame or not depth_frame:
+            if not color_frame:
                 continue
 
             frame = np.asanyarray(color_frame.get_data())
-            roi_x, roi_y, roi_w, roi_h = self.roi
-            roi_frame = frame[roi_y:roi_y + roi_h, roi_x:roi_x + roi_w]
-
-            results = self.model(roi_frame)
-
-            for r in results:
-                for box in r.boxes:
-                    x1, y1, x2, y2 = map(int, box.xyxy[0])
-                    cv2.rectangle(roi_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-
             cv2.imshow("Calibration", frame)
+
             if self.selected_point:
                 x, y = self.selected_point
-                depth_intrinsics = depth_frame.profile.as_video_stream_profile().intrinsics
-                depth_value = depth_frame.get_distance(x, y)
-                camera_point = rs.rs2_deproject_pixel_to_point(depth_intrinsics, [x, y], depth_value)
-                print(f"Clicked at camera point: {camera_point}")
-                
+                camera_point = [x, y]  # 2D point within ROI
+                print(f"Camera 2D point: {camera_point}")
+
                 robot_point = [
                     float(input(f"Enter robot X (meters) for point {len(self.calibration_points) + 1}: ")),
-                    float(input(f"Enter robot Y (meters) for point {len(self.calibration_points) + 1}: ")),
-                    float(input(f"Enter robot Z (meters) for point {len(self.calibration_points) + 1}: "))
+                    float(input(f"Enter robot Y (meters) for point {len(self.calibration_points) + 1}: "))
                 ]
                 
                 self.calibration_points.append({
@@ -110,51 +98,40 @@ class CameraToRobotTransformer:
                     'robot_point': robot_point
                 })
                 self.selected_point = None
-            
+
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
+        
         cv2.destroyAllWindows()
 
     def compute_transformation_matrix(self) -> np.ndarray:
-        if len(self.calibration_points) < 4:
-            raise ValueError("At least 4 calibration points are required")
+        if len(self.calibration_points) < 6:
+            raise ValueError("At least 6 calibration points are required for a 2D transformation.")
         
         camera_points = np.array([p['camera_point'] for p in self.calibration_points])
         robot_points = np.array([p['robot_point'] for p in self.calibration_points])
 
-        camera_centroid = np.mean(camera_points, axis=0)
-        robot_centroid = np.mean(robot_points, axis=0)
-        camera_centered = camera_points - camera_centroid
-        robot_centered = robot_points - robot_centroid
-
-        H = camera_centered.T @ robot_centered
-        U, _, Vt = np.linalg.svd(H)
-        R = Vt.T @ U.T
+        transformation_matrix, _ = cv2.estimateAffine2D(camera_points, robot_points)
+        transformation_matrix = np.vstack([transformation_matrix, [0, 0, 1]])  # Convert to 3x3
         
-        if np.linalg.det(R) < 0:
-            Vt[-1, :] *= -1
-            R = Vt.T @ U.T
+        self.transformation_matrix = transformation_matrix
+        print("Computed 2D Transformation Matrix:")
+        print(transformation_matrix)
         
-        t = robot_centroid - R @ camera_centroid
-        
-        self.transformation_matrix = np.eye(4)
-        self.transformation_matrix[:3, :3] = R
-        self.transformation_matrix[:3, 3] = t
-        
-        print("Computed Rotation Matrix:")
-        print(R)
-        print("Computed Translation Vector:")
-        print(t)
-
         self.save_transformation_matrix()
-        return self.transformation_matrix
+        return transformation_matrix
 
     def transform_point(self, camera_point: List[float]) -> List[float]:
         camera_point_homogeneous = np.array(camera_point + [1])
         robot_point_homogeneous = self.transformation_matrix @ camera_point_homogeneous
-        return robot_point_homogeneous[:3].tolist()
+        return robot_point_homogeneous[:2].tolist()
+    
+    def test_transform_point(self) -> None:
+        if self.selected_point:
+            robot_point = self.transform_point(self.selected_point)
+            print(f"Camera ROI Point: {self.selected_point} -> Robot Point: {robot_point}")
 
-    def save_transformation_matrix(self, filename_pkl: str = "transformation_matrix.pkl", filename_csv: str = "transformation_matrix.csv") -> None:
+    def save_transformation_matrix(self, filename_pkl: str = "transformation_matrix_2d.pkl", filename_csv: str = "transformation_matrix_2d.csv") -> None:
         with open(filename_pkl, "wb") as f:
             pickle.dump(self.transformation_matrix, f)
         np.savetxt(filename_csv, self.transformation_matrix, delimiter=",")
@@ -164,12 +141,10 @@ class CameraToRobotTransformer:
         self.pipeline.stop()
 
 if __name__ == "__main__":
-    transformer = CameraToRobotTransformer()
+    transformer = CameraToRobotTransformer2D()
     try:
-        transformer.collect_calibration_points(num_points=4)
+        transformer.collect_calibration_points(num_points=6)
         transformation_matrix = transformer.compute_transformation_matrix()
-        print("Final Transformation Matrix:\n", transformation_matrix)
-        test_camera_point = [0.1, 0.2, 0.3]
-        print("Transformed Test Point:", transformer.transform_point(test_camera_point))
+        print("Final 2D Transformation Matrix:\n", transformation_matrix)
     except Exception as e:
         print(f"An error occurred: {e}")
